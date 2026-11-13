@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/ShipmentTracker.Core/ShipmentTracker.Core.csproj" />
+  <Project Path="src/ShipmentTracker.Desktop/ShipmentTracker.Desktop.csproj" />
+  <Project Path="tests/ShipmentTracker.Tests/ShipmentTracker.Tests.csproj" />
+</Solution>

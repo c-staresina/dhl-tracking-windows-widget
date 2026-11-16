@@ -10,6 +10,9 @@ public sealed class TrackerState
     public bool AuthorizedAccess { get; set; }
     public bool Notifications { get; set; } = true;
     public bool AlwaysOnTop { get; set; }
+    public bool CompactLayout { get; set; }
+    public TimeOnly? DailyCheckTime { get; set; }
+    public DateTimeOffset? DailyScheduleChangedAt { get; set; }
     public bool StartAtSignIn { get; set; }
     public string Hotkey { get; set; } = "None";
     public List<Shipment> Shipments { get; set; } = [];
@@ -20,6 +23,7 @@ public sealed class TrackerState
 
 public sealed class Shipment
 {
+    public DateTimeOffset? AddedAt { get; set; }
     public string TrackingNumber { get; set; } = "";
     public string Label { get; set; } = "";
     public string StatusCode { get; set; } = "";

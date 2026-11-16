@@ -23,10 +23,17 @@ internal static class Program
             if (smoke)
             {
                 state.Shipments.Add(new() { TrackingNumber = "SYNTHETIC-SMOKE", Label = "Synthetic smoke fixture" });
+                state.CompactLayout = true;
+                state.DailyCheckTime = new TimeOnly(8, 0);
+                state.DailyScheduleChangedAt = DateTimeOffset.UtcNow;
                 store.SaveAsync(state, default).GetAwaiter().GetResult();
-                if (store.Load().Shipments.Count != 1) throw new InvalidDataException("Encrypted persistence smoke test failed.");
+                state = store.Load();
+                if (state.Shipments.Count != 1 || !state.CompactLayout ||
+                    state.DailyCheckTime != new TimeOnly(8, 0) || state.DailyScheduleChangedAt is null)
+                    throw new InvalidDataException("Encrypted persistence smoke test failed.");
             }
             var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            using var appearance = new AppAppearance(application);
             var window = new MainWindow(new TrackerEngine(state, store, new DhlTrackingClient(http)), smoke);
             application.MainWindow = window;
             window.Show();

@@ -10,8 +10,8 @@ public sealed class TrackingTests
     private static readonly DateTimeOffset Now = new(2026, 11, 13, 12, 0, 0, TimeSpan.Zero);
 
     [Theory]
-    [InlineData(1, 144)]
-    [InlineData(25, 144)]
+    [InlineData(1, 150)]
+    [InlineData(25, 150)]
     [InlineData(26, 150)]
     [InlineData(50, 288)]
     public void IntervalRespectsShipmentAndAccountBudgets(int count, int minutes) =>
@@ -23,7 +23,7 @@ public sealed class TrackingTests
         var shipment = new Shipment { TrackingNumber = "SYNTHETIC" };
         var state = new TrackerState { Shipments = [shipment] };
         state.Attempts.Add(new(shipment.BudgetId, Now));
-        Assert.Equal(Now.AddMinutes(144), RefreshPolicy.NextAllowed(state, shipment, Now));
+        Assert.Equal(Now.AddMinutes(150), RefreshPolicy.NextAllowed(state, shipment, Now));
         var other = new Shipment { TrackingNumber = "OTHER" };
         Assert.Equal(Now.AddSeconds(5), RefreshPolicy.NextAllowed(state, other, Now));
         state.Attempts = Enumerable.Range(0, 10).Select(i => new RequestAttempt(shipment.BudgetId, Now.AddMinutes(-20 + i))).ToList();
@@ -46,6 +46,23 @@ public sealed class TrackingTests
         await restored.CheckNextAsync();
         Assert.Equal(1, client.Calls);
         Assert.Single((await restored.SnapshotAsync()).Attempts);
+    }
+
+    [Fact]
+    public async Task LayoutChangesSurviveRestartWithoutResettingQuota()
+    {
+        var store = new MemoryStore();
+        var client = new FakeClient();
+        var engine = new TrackerEngine(ReadyState(), store, client, new FixedClock());
+        await engine.CheckNextAsync();
+        await engine.ChangeAsync(state => state.CompactLayout = true);
+
+        var restored = new TrackerEngine(store.Saved!, store, client, new FixedClock());
+        var state = await restored.SnapshotAsync();
+        Assert.True(state.CompactLayout);
+        Assert.Single(state.Attempts);
+        await restored.CheckNextAsync();
+        Assert.Equal(1, client.Calls);
     }
 
     [Fact]
@@ -175,15 +192,23 @@ public sealed class TrackingTests
     }
 
     [Theory]
-    [InlineData(1, 10)]
-    [InlineData(26, 250)]
-    [InlineData(50, 250)]
-    public async Task WholeDayScheduleMeetsExactBudgetsAndSpacing(int shipments, int expectedCalls)
+    [InlineData(1, 10, false)]
+    [InlineData(26, 250, false)]
+    [InlineData(50, 250, false)]
+    [InlineData(1, 9, true)]
+    [InlineData(26, 234, true)]
+    [InlineData(50, 250, true)]
+    public async Task WholeDayScheduleMeetsExactBudgetsAndSpacing(int shipments, int expectedCalls, bool preferred)
     {
         var state = ReadyState();
         state.Shipments = Enumerable.Range(0, shipments)
             .Select(i => new Shipment { TrackingNumber = "SYNTHETIC-" + i }).ToList();
         var clock = new MovingClock { Now = Now };
+        if (preferred)
+        {
+            state.DailyCheckTime = new TimeOnly(12, 0);
+            state.DailyScheduleChangedAt = Now;
+        }
         var store = new MemoryStore();
         var client = new FakeClient();
         var engine = new TrackerEngine(state, store, client, clock);
@@ -193,7 +218,7 @@ public sealed class TrackingTests
             await engine.CheckNextAsync();
             var snapshot = await engine.SnapshotAsync();
             if (snapshot.Attempts.Count > audit.Count) audit.Add(snapshot.Attempts[^1]);
-            var next = snapshot.Shipments.Min(s => RefreshPolicy.NextAllowed(snapshot, s, clock.Now));
+            var next = snapshot.Shipments.Min(s => RefreshPolicy.NextAllowed(snapshot, s, clock.Now, clock.LocalTimeZone));
             Assert.True(next > clock.Now);
             clock.Now = next;
         }
@@ -208,6 +233,79 @@ public sealed class TrackingTests
         }
         for (var i = 1; i < audit.Count; i++)
             Assert.True(audit[i].At - audit[i - 1].At >= TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task PreferredDailyTargetSurvivesLateTicksAndRestartWithoutCatchUp()
+    {
+        var start = Now.Date.AddHours(8);
+        var state = ReadyState();
+        state.DailyCheckTime = new TimeOnly(8, 0);
+        state.DailyScheduleChangedAt = new DateTimeOffset(start.AddHours(-1), TimeSpan.Zero);
+        var clock = new MovingClock { Now = state.DailyScheduleChangedAt.Value };
+        var store = new MemoryStore();
+        var client = new FakeClient();
+        var engine = new TrackerEngine(state, store, client, clock);
+        await engine.CheckNextAsync();
+        Assert.Equal(0, client.Calls);
+        var audit = new List<DateTimeOffset>();
+        for (var day = 0; day < 2; day++)
+        {
+            for (var check = 0; check < 9; check++)
+            {
+                var snapshot = await engine.SnapshotAsync();
+                clock.Now = RefreshPolicy.NextAllowed(snapshot, snapshot.Shipments[0], clock.Now, TimeZoneInfo.Utc).AddSeconds(2);
+                await engine.CheckNextAsync();
+                audit.Add(clock.Now);
+                Assert.Equal(audit.Count, client.Calls);
+                await engine.CheckNextAsync();
+                Assert.Equal(audit.Count, client.Calls);
+                engine = new TrackerEngine(store.Saved!, store, client, clock);
+            }
+            Assert.Equal(new DateTimeOffset(start.AddDays(day).AddHours(20), TimeSpan.Zero).AddSeconds(18), audit[^1]);
+            var saved = await engine.SnapshotAsync();
+            Assert.Equal(new DateTimeOffset(start.AddDays(day + 1), TimeSpan.Zero),
+                RefreshPolicy.NextAllowed(saved, saved.Shipments[0], clock.Now, TimeZoneInfo.Utc));
+        }
+        Assert.All(audit.Zip(audit.Skip(1)), pair => Assert.True(pair.Second - pair.First >= TimeSpan.FromMinutes(150)));
+    }
+
+    [Fact]
+    public void PreferredScheduleCannotOverrideGuardsAndNewShipmentsWaitForTheirTarget()
+    {
+        var state = ReadyState();
+        state.DailyCheckTime = new TimeOnly(12, 0);
+        state.DailyScheduleChangedAt = Now.AddDays(-1);
+        var shipment = state.Shipments[0];
+        state.Attempts.Add(new(shipment.BudgetId, Now.AddMinutes(-60)));
+        Assert.Equal(Now.AddMinutes(90), RefreshPolicy.NextAllowed(state, shipment, Now, TimeZoneInfo.Utc));
+        state.BlockedUntil = Now.AddHours(6);
+        Assert.Equal(Now.AddHours(6), RefreshPolicy.NextAllowed(state, shipment, Now, TimeZoneInfo.Utc));
+        state.BlockedUntil = null;
+        state.Attempts = Enumerable.Range(0, 10).Select(i => new RequestAttempt(shipment.BudgetId, Now.AddMinutes(-20 + i))).ToList();
+        Assert.True(RefreshPolicy.NextAllowed(state, shipment, Now, TimeZoneInfo.Utc) > Now.AddHours(23));
+        state.Attempts.Clear();
+        shipment.AddedAt = Now.AddMinutes(1);
+        Assert.Equal(Now.AddDays(1), RefreshPolicy.NextAllowed(state, shipment, Now.AddMinutes(1), TimeZoneInfo.Utc));
+        state.Shipments.Add(new() { TrackingNumber = "SECOND", AddedAt = Now.AddMinutes(1) });
+        Assert.Equal(Now.AddDays(1).AddSeconds(5),
+            RefreshPolicy.NextAllowed(state, state.Shipments[1], Now.AddMinutes(1), TimeZoneInfo.Utc));
+    }
+
+    [Theory]
+    [InlineData("2026-03-08T05:00:00Z", 2, 30, "2026-03-08T07:00:00Z")]
+    [InlineData("2026-11-01T04:00:00Z", 1, 30, "2026-11-01T06:30:00Z")]
+    public void PreferredDailyTargetHandlesMissingAndRepeatedLocalTimes(string configured, int hour, int minute, string expected)
+    {
+        var now = DateTimeOffset.Parse(configured);
+        var state = ReadyState();
+        state.DailyCheckTime = new TimeOnly(hour, minute);
+        state.DailyScheduleChangedAt = now;
+        var zone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+        var target = RefreshPolicy.NextAllowed(state, state.Shipments[0], now, zone);
+        Assert.Equal(DateTimeOffset.Parse(expected), target);
+        state.Attempts.Add(new(state.Shipments[0].BudgetId, target));
+        Assert.True(RefreshPolicy.NextAllowed(state, state.Shipments[0], target, zone) >= target.AddMinutes(150));
     }
 
     [Fact]
@@ -238,6 +336,7 @@ public sealed class TrackingTests
     private sealed class MovingClock : TimeProvider
     {
         public DateTimeOffset Now { get; set; }
+        public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;
         public override DateTimeOffset GetUtcNow() => Now;
     }
 

@@ -10,6 +10,10 @@ namespace ShipmentTracker.Desktop;
 internal sealed class WindowsIntegration : IDisposable
 {
     private const int HotkeyId = 401;
+    private const uint Alt = 0x0001;
+    private const uint Control = 0x0002;
+    private const uint Windows = 0x0008;
+    private const uint NoRepeat = 0x4000;
     private readonly IntPtr handle;
     private readonly HwndSource source;
     private readonly Action toggle;
@@ -25,16 +29,21 @@ internal sealed class WindowsIntegration : IDisposable
 
     public void SetHotkey(string hotkey)
     {
-        if (hotkey is not ("None" or "Ctrl+Alt+D" or "Ctrl+Alt+T"))
-            throw new InvalidOperationException("Unsupported shortcut. Select a shortcut from Settings.");
+        var (modifiers, key) = hotkey switch
+        {
+            "None" => (0u, 0u),
+            "Ctrl+Alt+D" => (Control | Alt, 0x44u),
+            "Ctrl+Alt+T" => (Control | Alt, 0x54u),
+            "Win+Alt+P" => (Windows | Alt, 0x50u),
+            _ => throw new InvalidOperationException("Unsupported shortcut. Select a shortcut from Settings.")
+        };
         if (registered)
         {
             if (!UnregisterHotKey(handle, HotkeyId)) throw new Win32Exception(Marshal.GetLastWin32Error());
             registered = false;
         }
         if (hotkey == "None") return;
-        var key = hotkey.EndsWith('D') ? 0x44u : 0x54u;
-        if (!RegisterHotKey(handle, HotkeyId, 0x4003, key))
+        if (!RegisterHotKey(handle, HotkeyId, modifiers | NoRepeat, key))
             throw new Win32Exception(Marshal.GetLastWin32Error(), "That shortcut could not be registered. Choose another in Settings.");
         registered = true;
     }

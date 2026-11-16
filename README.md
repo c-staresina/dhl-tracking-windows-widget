@@ -41,24 +41,72 @@ and .NET Desktop Runtime. There is no installer or automatic updater.
 
 1. Open **Settings**, enter your key locally, and confirm you have approved DHL access.
    Leave authorization unchecked to keep live API calls disabled.
-2. Add tracking numbers and optional private labels.
+2. Expand **Add a shipment** to enter a tracking number and optional private label.
+   The form collapses after adding a shipment to leave more room for status cards.
 3. Use **Open on DHL** for the latest website status at any time. This opens the official site
-   in your browser without an API call; it does not refresh the app's cached data.
+   in your browser with the tracking number and automatic submission requested, without an
+   app API call; it does not refresh the app's cached data. DHL may still show cookie-consent
+   or security prompts before displaying results.
 4. Closing the window hides it to the system tray; use the tray menu's **Exit** to stop checking.
    Left-click the tray icon to reopen. Windows may put the icon in its overflow menu.
-5. Settings include always-on-top, delivery alerts, optional Ctrl+Alt+D or Ctrl+Alt+T show/hide
+5. Settings include always-on-top, delivery alerts, optional Win+Alt+P, Ctrl+Alt+D or Ctrl+Alt+T show/hide
    shortcuts, and opt-in start-at-sign-in. An unavailable shortcut is reported explicitly.
    Startup adds an entry under your Windows user's `Run` registry key; uncheck it to remove it.
    Enable startup only from the published executable at its permanent location.
+
+To use the Windows-key shortcut, select **Win+Alt+P** under **Settings > Show/hide shortcut**
+and save. It toggles the tracker window while the app is running in the tray; it does not
+launch an exited app. Existing shortcut choices are preserved until you change them.
+Windows-key combinations may be reserved by Windows or claimed by another app, and their
+availability can change after updates. A conflict is reported rather than overridden.
+
+The interface follows your Windows **app mode** (light or dark), including changes made
+while the tracker is running, and uses Windows system colors in high-contrast mode.
+The window and system tray use a custom parcel icon. Rounded shipment cards show status,
+delivery estimates, check times, and any stale-data warnings without changing request limits.
+Use **Compact** at the top of the tracker to switch to a smaller window with tighter spacing
+and slightly smaller text; use **Comfortable** to switch back. The layout selection is saved
+locally and restored on the next launch. Existing installations start in Comfortable mode.
+Settings remains full-size for readability.
+
+**Check when due** checks one eligible shipment, not every shipment. Automatic checking
+already runs in the background. If nothing is due, this button makes no API request; it
+never overrides the displayed next permitted check time or the request limits.
+
+### Preferred daily time
+
+In **Settings > Check schedule**, enable **Align checks to a preferred daily time**,
+enter a 24-hour local time such as `08:00`, and save. This applies to all active shipments,
+staggered at least five seconds apart. Enabling or changing the target waits until its next
+occurrence; newly added shipments also wait for their next target. Leave it off for normal
+interval-based checking, whose clock times can drift across days. The option starts off.
+
+With a small shipment count and an `08:00` target, the nominal pattern is `08:00`, `10:30`,
+`13:00`, `15:30`, `18:00`, `20:30`, `23:00`, `01:30`, `04:00`, then `08:00` again.
+The `06:30` check is skipped because it would be too close to the next target: nine checks
+per daily cycle, with a four-hour overnight gap. Larger shipment counts can increase spacing
+and reduce the number of checks. This is not a work-hours-only polling mode.
+
+The target never bypasses the rolling budgets, minimum spacing, failures, or DHL throttling.
+Recent attempts, sleep/offline time and other shipments can delay a target. After downtime,
+only an eligible check is attempted, not all missed checks. Unrelated Settings saves and
+restarts preserve the schedule. Windows local time is used; a nonexistent daylight-saving
+time moves to the first valid minute and a repeated time uses its later occurrence.
+
+DHL expects checks to be evenly distributed throughout the day but does not publish an
+exact tolerance. This optional pattern has a longer gap at the daily boundary; enforcing the
+numeric limits alone is not a guarantee of DHL's interpretation. Ask DHL for confirmation if
+you need assurance for this anchored pattern. No setting concentrates ten checks into work hours.
 
 ## Request limits and delivery alerts
 
 All attempted requests, including failures, share a persisted **rolling-24-hour** budget:
 
 - At most **250 requests overall**, at most **10 per shipment**, and at least **five seconds between requests**.
-- Per-shipment interval in whole minutes: `max(144, ceiling(1440 * active shipments / 250))`.
-  One through 25 shipments use **2 hours 24 minutes**; 26 use **2 hours 30 minutes**;
-  50 use **4 hours 48 minutes**. New shipments start with staggered checks.
+- Minimum per-shipment interval in whole minutes: `max(150, ceiling(1440 * active shipments / 250))`.
+  One through 26 shipments use **2 hours 30 minutes**; 50 use **4 hours 48 minutes**.
+  New shipments start with staggered checks. A preferred daily time can delay or skip a check,
+  never shorten this interval.
 - **Check when due** runs the next permitted check only. It cannot bypass the interval or either
   quota. Reopening the window does not force an early fetch.
 - No catch-up bursts after sleep, and no immediate retries after errors.
@@ -107,7 +155,8 @@ An isolated native smoke check is available:
 .\src\ShipmentTracker.Desktop\bin\Release\net10.0-windows\ShipmentTracker.Desktop.exe --smoke-test
 ```
 
-It uses a temporary synthetic record, checks DPAPI persistence and native window/tray startup,
+It uses a temporary synthetic record, checks DPAPI persistence (including the layout and daily target),
+both layout sizes, and native window/tray startup,
 then exits and removes its temporary files. It does not configure startup, register a hotkey,
 send an alert, open a tracking website, or contact DHL. It is not a substitute for checking your
 notification settings, a locally configured key, or sign-in behavior.

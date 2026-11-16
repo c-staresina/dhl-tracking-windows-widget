@@ -7,7 +7,6 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
-using System.Windows.Media;
 using System.Windows.Threading;
 using ShipmentTracker.Core;
 using Forms = System.Windows.Forms;
@@ -22,54 +21,97 @@ internal sealed class MainWindow : Window
     private readonly SemaphoreSlim operation = new(1, 1);
     private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromSeconds(5) };
     private readonly StackPanel cards = new();
-    private readonly TextBlock summary = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) };
-    private readonly TextBlock error = new() { TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DarkRed };
+    private readonly TextBlock summary = new() { TextWrapping = TextWrapping.Wrap };
+    private readonly TextBlock error = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 0) };
     private readonly TextBox number = new() { MinWidth = 160, MaxLength = 100 };
     private readonly TextBox label = new() { MinWidth = 160, MaxLength = 100 };
+    private readonly Expander addShipment = new() { Header = "Add a shipment" };
+    private readonly Button layoutToggle;
     private readonly Forms.NotifyIcon tray;
+    private readonly System.Drawing.Icon parcelIcon;
     private WindowsIntegration? integration;
     private bool exiting;
     private bool initialized;
     private bool faulted;
+    private bool compactLayout;
 
     public MainWindow(TrackerEngine engine, bool smoke)
     {
         this.engine = engine;
         this.smoke = smoke;
+        SetResourceReference(StyleProperty, typeof(Window));
+        SourceInitialized += (_, _) => AppAppearance.StyleCaption(this);
         Title = "Shipment Tracker";
-        Width = 440;
-        Height = 620;
-        MinWidth = 360;
+        Width = 480;
+        Height = Math.Min(780, SystemParameters.WorkArea.Height - 32);
+        MinWidth = 420;
         MinHeight = 380;
-        Background = Brushes.WhiteSmoke;
-        var panel = new StackPanel { Margin = new Thickness(16) };
-        panel.Children.Add(new TextBlock { Text = "Shipment Tracker", FontSize = 23, FontWeight = FontWeights.SemiBold });
-        panel.Children.Add(new TextBlock { Text = "Independent desktop tracker", Margin = new Thickness(0, 0, 0, 12) });
-        panel.Children.Add(summary);
+        parcelIcon = ParcelIcon.Create();
+        Icon = ParcelIcon.WindowImage(parcelIcon);
+        error.SetResourceReference(StyleProperty, "ErrorText");
+        summary.SetResourceReference(TextBlock.LineHeightProperty, "SummaryLineHeight");
+        var panel = new StackPanel();
+        panel.SetResourceReference(MarginProperty, "PageMargin");
+        var header = new DockPanel();
+        header.SetResourceReference(MarginProperty, "HeaderMargin");
+        layoutToggle = Button("Compact", () => RunAsync(ToggleLayoutAsync));
+        layoutToggle.Margin = new Thickness(8, 0, 0, 0);
+        layoutToggle.Padding = new Thickness(9, 6, 9, 6);
+        layoutToggle.FontSize = 12;
+        layoutToggle.VerticalAlignment = VerticalAlignment.Top;
+        DockPanel.SetDock(layoutToggle, Dock.Right);
+        header.Children.Add(layoutToggle);
+        var mark = new Image { Source = Icon, Margin = new Thickness(0, 0, 12, 0) };
+        mark.SetResourceReference(WidthProperty, "HeaderIconSize");
+        mark.SetResourceReference(HeightProperty, "HeaderIconSize");
+        header.Children.Add(mark);
+        var title = new StackPanel();
+        var titleText = new TextBlock { Text = "Shipment Tracker", FontWeight = FontWeights.SemiBold };
+        titleText.SetResourceReference(FontSizeProperty, "WindowTitleSize");
+        title.Children.Add(titleText);
+        title.Children.Add(Muted("Your DHL deliveries, at a glance"));
+        header.Children.Add(title);
+        panel.Children.Add(header);
+        panel.Children.Add(Surface(summary));
         var actions = new WrapPanel();
         actions.Children.Add(Button("Settings", () => RunAsync(SettingsAsync)));
-        actions.Children.Add(Button("Check when due", () => RunAsync(CheckAsync)));
+        var check = Button("Check when due", () => RunAsync(CheckAsync));
+        check.ToolTip = "Check the next eligible shipment. The preferred daily schedule, daily limits and minimum intervals still apply.";
+        actions.Children.Add(check);
         actions.Children.Add(Button("Hide to tray", () => { Hide(); return Task.CompletedTask; }));
         panel.Children.Add(actions);
-        panel.Children.Add(new TextBlock { Text = "Tracking number", Margin = new Thickness(0, 12, 0, 4) });
+        var addPanel = new StackPanel();
+        addPanel.Children.Add(new TextBlock { Text = "Tracking number", Margin = new Thickness(0, 14, 0, 6) });
         number.SetValue(AutomationProperties.NameProperty, "Tracking number");
-        panel.Children.Add(number);
-        panel.Children.Add(new TextBlock { Text = "Label (optional)", Margin = new Thickness(0, 8, 0, 4) });
+        addPanel.Children.Add(number);
+        addPanel.Children.Add(new TextBlock { Text = "Label (optional)", Margin = new Thickness(0, 12, 0, 6) });
         label.SetValue(AutomationProperties.NameProperty, "Shipment label");
-        panel.Children.Add(label);
-        panel.Children.Add(Button("Add shipment", () => RunAsync(AddAsync)));
+        addPanel.Children.Add(label);
+        var add = Button("Add shipment", () => RunAsync(AddAsync));
+        add.SetResourceReference(StyleProperty, "PrimaryButton");
+        add.HorizontalAlignment = HorizontalAlignment.Left;
+        add.Margin = new Thickness(0, 14, 0, 0);
+        addPanel.Children.Add(add);
+        addShipment.Content = addPanel;
+        var addSurface = Surface(addShipment);
+        addSurface.SetResourceReference(MarginProperty, "SectionMargin");
+        panel.Children.Add(addSurface);
         panel.Children.Add(error);
+        var shipmentsHeading = new TextBlock { Text = "Your shipments", FontWeight = FontWeights.SemiBold };
+        shipmentsHeading.SetResourceReference(FontSizeProperty, "SectionTitleSize");
+        shipmentsHeading.SetResourceReference(MarginProperty, "SectionMargin");
+        panel.Children.Add(shipmentsHeading);
         panel.Children.Add(cards);
-        panel.Children.Add(new TextBlock { Text = Attribution, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 16, 0, 0) });
-        panel.Children.Add(new TextBlock
-        {
-            Text = "Closing hides to tray. Use the tray menu to exit.\nChecks and alerts require this app to be running and your PC awake and online.",
-            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0), Foreground = Brushes.DimGray
-        });
-        Content = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        var attribution = Muted(Attribution);
+        attribution.Margin = new Thickness(0, 22, 0, 0);
+        panel.Children.Add(attribution);
+        panel.Children.Add(Muted("Independent app. Closing hides to tray; use the tray menu to exit.\nChecks require this app to be running and your PC awake and online."));
+        var scroller = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        scroller.SetResourceReference(BackgroundProperty, "CanvasBrush");
+        Content = scroller;
         tray = new Forms.NotifyIcon
         {
-            Icon = System.Drawing.SystemIcons.Application,
+            Icon = parcelIcon,
             Text = "Shipment Tracker",
             Visible = true,
             ContextMenuStrip = new Forms.ContextMenuStrip()
@@ -93,6 +135,8 @@ internal sealed class MainWindow : Window
     {
         integration = new(this, () => { if (IsVisible) Hide(); else ShowTracker(); });
         var state = await engine.SnapshotAsync();
+        addShipment.IsExpanded = state.Shipments.Count == 0;
+        ApplyLayout(state.CompactLayout);
         Topmost = state.AlwaysOnTop;
         if (!smoke)
         {
@@ -105,6 +149,13 @@ internal sealed class MainWindow : Window
         {
             await CheckAsync();
             if (cards.Children.Count != 1) throw new InvalidOperationException("Synthetic shipment card did not render.");
+            var originalWidth = Width;
+            await ToggleLayoutAsync();
+            if (compactLayout || Width <= originalWidth || (await engine.SnapshotAsync()).CompactLayout)
+                throw new InvalidOperationException("Comfortable layout smoke test failed.");
+            await ToggleLayoutAsync();
+            if (!compactLayout || Width >= originalWidth + 1 || !(await engine.SnapshotAsync()).CompactLayout)
+                throw new InvalidOperationException("Compact layout smoke test failed.");
             var closer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
             closer.Tick += (_, _) => { closer.Stop(); Exit(); };
             closer.Start();
@@ -120,6 +171,39 @@ internal sealed class MainWindow : Window
             tray.ShowBalloonTip(10000, "Shipment delivered", notification + "\n" + Attribution, Forms.ToolTipIcon.Info);
     }
 
+    private async Task ToggleLayoutAsync()
+    {
+        var compact = !compactLayout;
+        await engine.ChangeAsync(state => state.CompactLayout = compact);
+        ApplyLayout(compact);
+        await RenderAsync();
+    }
+
+    private void ApplyLayout(bool compact)
+    {
+        compactLayout = compact;
+        Resources["BodyFontSize"] = compact ? 13d : 14d;
+        Resources["WindowTitleSize"] = compact ? 21d : 26d;
+        Resources["SectionTitleSize"] = compact ? 16d : 18d;
+        Resources["SummaryLineHeight"] = compact ? 20d : 23d;
+        Resources["HeaderIconSize"] = compact ? 32d : 42d;
+        Resources["ButtonHeight"] = compact ? 32d : 38d;
+        Resources["InputHeight"] = compact ? 34d : 40d;
+        Resources["PageMargin"] = new Thickness(compact ? 14 : 24);
+        Resources["HeaderMargin"] = new Thickness(0, 0, 0, compact ? 12 : 22);
+        Resources["SectionMargin"] = new Thickness(0, compact ? 12 : 20, 0, 0);
+        Resources["SurfacePadding"] = new Thickness(compact ? 12 : 18);
+        Resources["ButtonPadding"] = compact ? new Thickness(10, 6, 10, 6) : new Thickness(14, 9, 14, 9);
+        Resources["InputPadding"] = compact ? new Thickness(8, 6, 8, 6) : new Thickness(10, 9, 10, 9);
+        Resources["ButtonMargin"] = compact ? new Thickness(0, 6, 6, 0) : new Thickness(0, 10, 8, 0);
+        MinWidth = compact ? 360 : 420;
+        Width = compact ? 400 : 480;
+        Height = Math.Min(compact ? 620 : 780, SystemParameters.WorkArea.Height - 32);
+        layoutToggle.Content = compact ? "Comfortable" : "Compact";
+        layoutToggle.ToolTip = compact ? "Current layout: Compact. Switch to Comfortable." : "Current layout: Comfortable. Switch to Compact.";
+        layoutToggle.SetValue(AutomationProperties.NameProperty, compact ? "Switch to comfortable layout" : "Switch to compact layout");
+    }
+
     private async Task AddAsync()
     {
         var tracking = number.Text.Trim();
@@ -130,10 +214,11 @@ internal sealed class MainWindow : Window
         {
             if (state.Shipments.Any(s => s.BudgetId == Shipment.TrackingIdentity(tracking)))
                 throw new InvalidOperationException("That shipment is already being tracked.");
-            state.Shipments.Add(new() { TrackingNumber = tracking, Label = displayLabel });
+            state.Shipments.Add(new() { TrackingNumber = tracking, Label = displayLabel, AddedAt = DateTimeOffset.UtcNow });
         });
         number.Clear();
         label.Clear();
+        addShipment.IsExpanded = false;
         await RenderAsync();
     }
 
@@ -143,30 +228,72 @@ internal sealed class MainWindow : Window
         var now = DateTimeOffset.UtcNow;
         var active = state.Shipments.Count(s => !s.IsDelivered);
         var interval = RefreshPolicy.Interval(active);
-        summary.Text = $"Active: {active}  |  Interval per shipment: {interval.TotalHours:0.##} hours\n" +
-            $"Attempts in last 24h: {state.Attempts.Count}/250. At most 10 per shipment.\n" +
-            (!state.AuthorizedAccess || state.ApiKey.Length == 0 ? "Live checks disabled. Configure your own key and authorized access in Settings." : "Background checks enabled while this app runs.") +
+        summary.Text = $"{active} active  /  Minimum spacing: {(int)interval.TotalHours}h {interval.Minutes:00}m\n" +
+            (state.DailyCheckTime is { } preferred ? $"Daily target: {preferred:HH:mm} local (staggered)\n" : "") +
+            $"{state.Attempts.Count} of 250 requests used in the last 24h\n" +
+            (!state.AuthorizedAccess || state.ApiKey.Length == 0 ? "Live checks disabled. Add your key and confirm approved access in Settings." : "Background checks enabled while this app runs.") +
             (state.ServiceMessage.Length > 0 ? "\n" + state.ServiceMessage : "");
         cards.Children.Clear();
+        if (state.Shipments.Count == 0)
+        {
+            var empty = new StackPanel();
+            empty.Children.Add(new TextBlock { Text = "No shipments yet", FontSize = 16, FontWeight = FontWeights.SemiBold });
+            empty.Children.Add(Muted("Add a tracking number above to see its latest status here. Each shipment is checked at most ten times per day."));
+            var emptySurface = Surface(empty);
+            emptySurface.Margin = new Thickness(0, 12, 0, 0);
+            cards.Children.Add(emptySurface);
+        }
         foreach (var shipment in state.Shipments)
         {
-            var card = new StackPanel { Margin = new Thickness(10) };
-            card.Children.Add(new TextBlock { Text = shipment.Label.Length > 0 ? shipment.Label : shipment.TrackingNumber, FontWeight = FontWeights.Bold, TextWrapping = TextWrapping.Wrap });
-            if (shipment.Label.Length > 0) card.Children.Add(Text(shipment.TrackingNumber));
-            card.Children.Add(Text(shipment.Status));
-            card.Children.Add(Text("Estimated delivery: " + (shipment.EstimatedDelivery.Length > 0 ? shipment.EstimatedDelivery : "Not provided")));
+            var card = new StackPanel();
+            var badgeText = new TextBlock
+            {
+                Text = shipment.IsDelivered ? "Delivered" : shipment.HasBaseline ? "Tracking" : "Pending",
+                FontSize = 12, FontWeight = FontWeights.SemiBold
+            };
+            if (shipment.IsDelivered) badgeText.SetResourceReference(TextBlock.ForegroundProperty, "SuccessBrush");
+            var badge = new Border { Child = badgeText, CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 4, 8, 4), HorizontalAlignment = HorizontalAlignment.Left };
+            badge.SetResourceReference(Border.BackgroundProperty, shipment.IsDelivered ? "SuccessSurfaceBrush" : "ControlBrush");
+            card.Children.Add(badge);
+            card.Children.Add(new TextBlock
+            {
+                Text = shipment.Label.Length > 0 ? shipment.Label : shipment.TrackingNumber,
+                FontSize = compactLayout ? 16 : 18, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, compactLayout ? 8 : 12, 0, 0)
+            });
+            if (shipment.Label.Length > 0) card.Children.Add(Muted(shipment.TrackingNumber));
+            var status = Text(shipment.Status);
+            status.Margin = new Thickness(0, 10, 0, 0);
+            card.Children.Add(status);
+            var buttons = new WrapPanel();
+            card.Children.Add(buttons);
+            var eta = Muted("ESTIMATED DELIVERY");
+            eta.FontSize = 11;
+            eta.Margin = new Thickness(0, compactLayout ? 10 : 16, 0, 4);
+            card.Children.Add(eta);
+            card.Children.Add(new TextBlock
+            {
+                Text = shipment.EstimatedDelivery.Length > 0 ? shipment.EstimatedDelivery : "Not provided",
+                FontWeight = FontWeights.SemiBold
+            });
             if (shipment.LatestEvent.Length > 0) card.Children.Add(Text(shipment.LatestEvent));
             if (shipment.Location.Length > 0) card.Children.Add(Text(shipment.Location));
-            if (shipment.EventTime.Length > 0) card.Children.Add(Text("DHL event time: " + shipment.EventTime));
-            card.Children.Add(Text("Last successful check: " + (shipment.LastSuccess?.ToLocalTime().ToString("g") ?? "Never")));
-            card.Children.Add(Text(shipment.IsDelivered ? "Delivered - automatic checks stopped." :
+            if (shipment.EventTime.Length > 0) card.Children.Add(Muted("DHL event time: " + shipment.EventTime));
+            var lastCheck = Muted("Last successful check: " + (shipment.LastSuccess?.ToLocalTime().ToString("g") ?? "Never"));
+            lastCheck.Margin = new Thickness(0, compactLayout ? 8 : 14, 0, 0);
+            card.Children.Add(lastCheck);
+            card.Children.Add(Muted(shipment.IsDelivered ? "Delivered - automatic checks stopped." :
                 "Next permitted check: " + RefreshPolicy.NextAllowed(state, shipment, now).ToLocalTime().ToString("g")));
             if (shipment.Error.Length > 0)
-                card.Children.Add(new TextBlock { Text = "Check failed; displayed data may be stale.\n" + shipment.Error, TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DarkRed });
-            var buttons = new WrapPanel();
+            {
+                var warning = Text("Check failed; displayed data may be stale.\n" + shipment.Error);
+                warning.SetResourceReference(TextBlock.ForegroundProperty, "ErrorBrush");
+                var warningSurface = new Border { Child = warning, Padding = new Thickness(10), CornerRadius = new CornerRadius(8), Margin = new Thickness(0, 12, 0, 0) };
+                warningSurface.SetResourceReference(Border.BackgroundProperty, "ErrorSurfaceBrush");
+                card.Children.Add(warningSurface);
+            }
             buttons.Children.Add(Button("Open on DHL", () =>
             {
-                Process.Start(new ProcessStartInfo("https://www.dhl.com/global-en/home/tracking.html?tracking-id=" +
+                Process.Start(new ProcessStartInfo("https://www.dhl.com/global-en/home/tracking.html?submit=1&tracking-id=" +
                     Uri.EscapeDataString(shipment.TrackingNumber)) { UseShellExecute = true });
                 return Task.CompletedTask;
             }));
@@ -175,8 +302,9 @@ internal sealed class MainWindow : Window
                 await engine.ChangeAsync(s => s.Shipments.RemoveAll(x => x.BudgetId == shipment.BudgetId));
                 await RenderAsync();
             })));
-            card.Children.Add(buttons);
-            cards.Children.Add(new Border { Background = Brushes.White, BorderBrush = Brushes.LightGray, BorderThickness = new Thickness(1), Margin = new Thickness(0, 12, 0, 0), Child = card });
+            var surface = Surface(card);
+            surface.Margin = new Thickness(0, 12, 0, 0);
+            cards.Children.Add(surface);
         }
     }
 
@@ -187,6 +315,7 @@ internal sealed class MainWindow : Window
         var dialog = new SettingsWindow(state) { Owner = this };
         if (dialog.ShowDialog() != true) return;
         var previousHotkey = state.Hotkey;
+        var dailyCheckTime = dialog.DailyCheckTime;
         var startupChanged = state.StartAtSignIn != dialog.Startup;
         try
         {
@@ -200,6 +329,11 @@ internal sealed class MainWindow : Window
                 s.AlwaysOnTop = dialog.AlwaysOnTop;
                 s.StartAtSignIn = dialog.Startup;
                 s.Hotkey = dialog.Hotkey;
+                if (s.DailyCheckTime != dailyCheckTime)
+                {
+                    s.DailyCheckTime = dailyCheckTime;
+                    s.DailyScheduleChangedAt = dailyCheckTime.HasValue ? DateTimeOffset.UtcNow : null;
+                }
             });
         }
         catch
@@ -245,9 +379,24 @@ internal sealed class MainWindow : Window
 
     private static TextBlock Text(string text) => new() { Text = text, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
 
+    internal static TextBlock Muted(string text)
+    {
+        var block = Text(text);
+        block.FontSize = 12;
+        block.SetResourceReference(StyleProperty, "MutedText");
+        return block;
+    }
+
+    internal static Border Surface(UIElement child)
+    {
+        var surface = new Border { Child = child };
+        surface.SetResourceReference(StyleProperty, "Surface");
+        return surface;
+    }
+
     internal static Button Button(string text, Func<Task> action)
     {
-        var button = new Button { Content = text, Margin = new Thickness(0, 6, 8, 0), Padding = new Thickness(8, 5, 8, 5) };
+        var button = new Button { Content = text };
         button.Click += async (_, _) =>
         {
             try { await action(); }
@@ -286,6 +435,7 @@ internal sealed class MainWindow : Window
         integration?.Dispose();
         tray.Visible = false;
         tray.Dispose();
+        parcelIcon.Dispose();
         Close();
         Application.Current.Shutdown(Environment.ExitCode);
     }

@@ -50,7 +50,7 @@ public sealed class TrackerEngine(TrackerState state, ITrackerStore store, ITrac
             if (!state.AuthorizedAccess || string.IsNullOrWhiteSpace(state.ApiKey)) return null;
             var shipment = state.Shipments.Where(s => !s.IsDelivered)
                 .OrderBy(s => state.Attempts.Where(a => a.ShipmentId == s.BudgetId).Select(a => a.At).DefaultIfEmpty(DateTimeOffset.MinValue).Max())
-                .FirstOrDefault(s => RefreshPolicy.NextAllowed(state, s, now) <= now);
+                .FirstOrDefault(s => RefreshPolicy.NextAllowed(state, s, now, clock.LocalTimeZone) <= now);
             if (shipment is null) return null;
             state.Attempts.Add(new(shipment.BudgetId, now));
             // Commit the attempt before sending so crashes and failures cannot refund quota.

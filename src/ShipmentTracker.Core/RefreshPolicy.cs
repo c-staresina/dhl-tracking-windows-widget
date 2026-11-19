@@ -29,14 +29,26 @@ public static class RefreshPolicy
             if (index < 0) throw new InvalidOperationException("Cannot schedule a shipment that is not active.");
             var stagger = TimeSpan.FromSeconds(index * 5d);
             var zone = timeZone ?? TimeZoneInfo.Local;
-            var start = Max(configured, shipment.AddedAt ?? configured);
-            var first = DailyAnchor(start, preferred, TimeSpan.Zero, zone) + stagger;
+            var first = DailyAnchor(configured, preferred, TimeSpan.Zero, zone) + stagger;
+            if (shipment.AddedAt is { } added && added > first)
+                first = NextSlot(added, preferred, stagger, Interval(active), zone);
             next = Max(next, first);
             var anchor = DailyAnchor(next, preferred, stagger, zone);
             // Leave enough room before the next daily target; never squeeze in an extra check.
             if (anchor > next && anchor - next < Interval(active)) next = anchor;
         }
         return next;
+    }
+
+    private static DateTimeOffset NextSlot(DateTimeOffset earliest, TimeOnly time, TimeSpan stagger, TimeSpan interval, TimeZoneInfo zone)
+    {
+        var date = TimeZoneInfo.ConvertTime(earliest - stagger, zone).Date;
+        var start = LocalInstant(date + time.ToTimeSpan(), zone) + stagger;
+        if (start > earliest)
+            start = LocalInstant(date.AddDays(-1) + time.ToTimeSpan(), zone) + stagger;
+        var slot = start + interval * Math.Ceiling((earliest - start).Ticks / (double)interval.Ticks);
+        var anchor = DailyAnchor(earliest, time, stagger, zone);
+        return slot < anchor ? slot : anchor;
     }
 
     private static DateTimeOffset DailyAnchor(DateTimeOffset earliest, TimeOnly time, TimeSpan stagger, TimeZoneInfo zone)

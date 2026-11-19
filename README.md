@@ -78,7 +78,9 @@ never overrides the displayed next permitted check time or the request limits.
 In **Settings > Check schedule**, enable **Align checks to a preferred daily time**,
 enter a 24-hour local time such as `08:00`, and save. This applies to all active shipments,
 staggered at least five seconds apart. Enabling or changing the target waits until its next
-occurrence; newly added shipments also wait for their next target. Leave it off for normal
+occurrence; newly added shipments join the next scheduled interval instead of waiting for
+the next day's target (for example, adding at `11:00` with an `08:00` target first checks at
+`13:00`). Leave it off for normal
 interval-based checking, whose clock times can drift across days. The option starts off.
 
 With a small shipment count and an `08:00` target, the nominal pattern is `08:00`, `10:30`,

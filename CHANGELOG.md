@@ -19,6 +19,8 @@
 
 ### Changed
 
+- Newly added shipments join the next interval in the preferred daily schedule instead
+  of waiting for the next daily target, while retaining spacing and quota guards.
 - Increased baseline check spacing from 2h24m to 2h30m. A preferred daily target
   normally gives nine checks per cycle, with a four-hour gap before the next target.
   Larger shipment counts can increase spacing.

@@ -271,7 +271,7 @@ public sealed class TrackingTests
     }
 
     [Fact]
-    public void PreferredScheduleCannotOverrideGuardsAndNewShipmentsWaitForTheirTarget()
+    public void PreferredScheduleCannotOverrideGuardsAndNewShipmentsJoinNextSlot()
     {
         var state = ReadyState();
         state.DailyCheckTime = new TimeOnly(12, 0);
@@ -286,10 +286,46 @@ public sealed class TrackingTests
         Assert.True(RefreshPolicy.NextAllowed(state, shipment, Now, TimeZoneInfo.Utc) > Now.AddHours(23));
         state.Attempts.Clear();
         shipment.AddedAt = Now.AddMinutes(1);
-        Assert.Equal(Now.AddDays(1), RefreshPolicy.NextAllowed(state, shipment, Now.AddMinutes(1), TimeZoneInfo.Utc));
+        Assert.Equal(Now.AddMinutes(150), RefreshPolicy.NextAllowed(state, shipment, Now.AddMinutes(1), TimeZoneInfo.Utc));
         state.Shipments.Add(new() { TrackingNumber = "SECOND", AddedAt = Now.AddMinutes(1) });
-        Assert.Equal(Now.AddDays(1).AddSeconds(5),
+        Assert.Equal(Now.AddMinutes(150).AddSeconds(5),
             RefreshPolicy.NextAllowed(state, state.Shipments[1], Now.AddMinutes(1), TimeZoneInfo.Utc));
+    }
+
+    [Theory]
+    [InlineData("2026-11-13T11:00:00Z", "2026-11-13T13:00:00Z")]
+    [InlineData("2026-11-13T10:30:00Z", "2026-11-13T10:30:00Z")]
+    [InlineData("2026-11-13T23:01:00Z", "2026-11-14T01:30:00Z")]
+    [InlineData("2026-11-14T02:00:00Z", "2026-11-14T04:00:00Z")]
+    [InlineData("2026-11-14T04:01:00Z", "2026-11-14T08:00:00Z")]
+    [InlineData("2026-11-14T06:45:00Z", "2026-11-14T08:00:00Z")]
+    public async Task NewShipmentJoinsPreferredSlotAndKeepsItAfterRestart(string addedAt, string expectedAt)
+    {
+        var added = DateTimeOffset.Parse(addedAt);
+        var expected = DateTimeOffset.Parse(expectedAt);
+        var state = ReadyState();
+        state.DailyCheckTime = new TimeOnly(8, 0);
+        state.DailyScheduleChangedAt = Now.AddDays(-1);
+        state.Shipments[0].AddedAt = added;
+        var clock = new MovingClock { Now = added };
+        var store = new MemoryStore();
+        var client = new FakeClient();
+        var engine = new TrackerEngine(state, store, client, clock);
+        await engine.ChangeAsync(s => s.CompactLayout = true);
+        engine = new TrackerEngine(store.Saved!, store, client, clock);
+        var restored = await engine.SnapshotAsync();
+        Assert.Equal(expected, RefreshPolicy.NextAllowed(restored, restored.Shipments[0], added, TimeZoneInfo.Utc));
+        if (expected > added)
+        {
+            clock.Now = expected.AddTicks(-1);
+            await engine.CheckNextAsync();
+            Assert.Equal(0, client.Calls);
+        }
+        clock.Now = expected;
+        await engine.CheckNextAsync();
+        Assert.Equal(1, client.Calls);
+        await engine.CheckNextAsync();
+        Assert.Equal(1, client.Calls);
     }
 
     [Theory]
